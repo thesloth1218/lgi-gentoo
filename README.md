@@ -1,6 +1,8 @@
-# lgi-gentoo
+# LGI-Gentoo
 
-Larry's Gentoo Installer is a TUI-driven Gentoo install orchestrator.
+Larry's Gentoo Installer is a Python TUI installer for Gentoo. It is intended
+to get a machine to a base install with support for custom kernel `.config`
+files, automatic disk management, and Ansible-driven outside/chroot phases.
 
 ## Live CD test package
 
@@ -24,21 +26,27 @@ cd lgi-gentoo
 python3 main.py
 ```
 
-## GitHub
+## Git clone workflow
 
-Initialize and push the repo with:
+On a live CD with `git` and network access:
 
 ```sh
-git add .
-git commit -m "Initial lgi-gentoo installer"
-git branch -M main
-git remote add origin git@github.com:YOUR_USER/lgi-gentoo.git
-git push -u origin main
+git clone https://github.com/TheSloth1218/LGI-Gentoo.git
+cd LGI-Gentoo
+python3 main.py
 ```
 
-Use the HTTPS remote instead if SSH keys are not set up:
+## Development
+
+Generate installer outputs:
 
 ```sh
-git remote add origin https://github.com/YOUR_USER/lgi-gentoo.git
+python3 main.py generate
+```
+
+Run the outside playbook:
+
+```sh
+python3 main.py install
 ```
 
