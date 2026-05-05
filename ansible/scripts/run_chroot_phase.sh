@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -eu
 
 cd /root/lgi-gentoo
@@ -20,6 +20,12 @@ elif command -v ansible-playbook >/dev/null 2>&1; then
 else
     emerge --oneshot --noreplace app-admin/ansible-core
     ANSIBLE_PLAYBOOK=ansible-playbook
+fi
+
+if [ -w /dev/tty ]; then
+    set -o pipefail
+    "$ANSIBLE_PLAYBOOK" -v -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml 2>&1 | tee /dev/tty
+    exit "${PIPESTATUS[0]}"
 fi
 
 exec "$ANSIBLE_PLAYBOOK" -v -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml
