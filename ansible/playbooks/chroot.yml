@@ -1,0 +1,17 @@
+---
+- name: LGI chroot installer phase
+  hosts: chroot
+  gather_facts: false
+  become: true
+  vars_files:
+    - /root/lgi-vars.yml
+
+  tasks:
+    - name: Chroot handoff placeholder
+      ansible.builtin.debug:
+        msg:
+          - "Chroot Ansible phase reached."
+          - "profile={{ system.profile }}"
+          - "kernel_package={{ kernel.kernel_package }}"
+          - "network_manager={{ system.network_manager }}"
+

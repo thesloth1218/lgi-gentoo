@@ -1,0 +1,431 @@
+---
+- name: LGI outside installer phase
+  hosts: livecd
+  gather_facts: true
+  become: false
+  vars_files:
+    - /tmp/lgi-gentoo/vars.yml
+  vars:
+    gentoo_mount: /mnt/gentoo
+    lgi_dot_config: "{{ playbook_dir }}/../../.config"
+    lgi_runner_package: /tmp/lgi-gentoo/lgi-gentoo-runner.tar.gz
+    lgi_run_chroot_phase: false
+    stage3_base_url: https://distfiles.gentoo.org/releases/amd64/autobuilds
+    stage3_variant: "{{ 'systemd' if system.init_system == 'systemd' else 'openrc' }}"
+    stage3_latest_file: "latest-stage3-amd64-{{ stage3_variant }}.txt"
+    stage3_tarball_prefix: "stage3-amd64-{{ stage3_variant }}-"
+    lgi_profile: "{{ 'default/linux/amd64/23.0/systemd' if system.init_system == 'systemd' else 'default/linux/amd64/23.0' }}"
+
+  pre_tasks:
+    - name: Show dry-run mode
+      ansible.builtin.debug:
+        msg: "dry_run={{ dry_run }}. Destructive tasks are skipped while dry_run is true."
+
+    - name: Require root privileges outside dry-run
+      ansible.builtin.assert:
+        that:
+          - ansible_user_uid == 0
+        fail_msg: "Run LGI as root for a real install. Dry-run mode can be tested without root."
+      when: not dry_run | bool
+
+    - name: Require target disk for automatic disk management
+      ansible.builtin.assert:
+        that:
+          - disk.diskmgmt != 'auto' or (disk.target_disk | default('', true) | length > 0)
+        fail_msg: "disk.target_disk is required when disk.diskmgmt is auto."
+
+    - name: Require root partition
+      ansible.builtin.assert:
+        that:
+          - disk.root_partition | default('', true) | length > 0
+        fail_msg: "disk.root_partition is required."
+
+    - name: Require EFI partition for UEFI installs
+      ansible.builtin.assert:
+        that:
+          - not disk.is_uefi | bool or (disk.efi_partition | default('', true) | length > 0)
+        fail_msg: "disk.efi_partition is required for UEFI installs."
+
+    - name: Check required outside tools
+      ansible.builtin.shell: "command -v {{ item }}"
+      loop:
+        - wget
+        - tar
+        - cp
+        - mount
+      changed_when: false
+      when: not dry_run | bool
+
+    - name: Check required auto-disk tools
+      ansible.builtin.shell: "command -v {{ item }}"
+      loop:
+        - wipefs
+        - parted
+        - partprobe
+      changed_when: false
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
+
+    - name: Check required filesystem formatter
+      ansible.builtin.shell: "command -v {{ item }}"
+      loop: "{{ (['mkfs.vfat'] if disk.is_uefi else []) + ['mkfs.' ~ disk.filesystem] }}"
+      changed_when: false
+      when: not dry_run | bool
+
+  tasks:
+    - name: Summarize install plan
+      ansible.builtin.debug:
+        msg:
+          - "stage3={{ stage3_variant }}"
+          - "stage3_latest_file={{ stage3_latest_file }}"
+          - "profile={{ lgi_profile }}"
+          - "diskmgmt={{ disk.diskmgmt }}"
+          - "target_disk={{ disk.target_disk | default('(manual/pre-mounted)', true) }}"
+          - "root_partition={{ disk.root_partition }}"
+          - "efi_partition={{ disk.efi_partition | default('(none)', true) }}"
+          - "boot_mode={{ disk.boot_mode }}"
+          - "partition_table={{ disk.partition_table }}"
+          - "filesystem={{ disk.filesystem }}"
+          - "kernel_package={{ kernel.kernel_package }}"
+
+    - name: Compute installation partition device names
+      ansible.builtin.set_fact:
+        lgi_part_prefix: "{{ 'p' if (disk.target_disk | default('')) is regex('[0-9]$') else '' }}"
+        lgi_efi_partition: "{{ (disk.efi_partition | default('', true)) if (disk.efi_partition | default('', true) | length > 0) else (disk.target_disk ~ ('p' if (disk.target_disk | default('')) is regex('[0-9]$') else '') ~ '1') }}"
+        lgi_root_partition: "{{ (disk.root_partition | default('', true)) if (disk.root_partition | default('', true) | length > 0) else (disk.target_disk ~ ('p' if (disk.target_disk | default('')) is regex('[0-9]$') else '') ~ (2 if disk.is_uefi else 1)) }}"
+
+    - name: Wipe existing filesystem signatures
+      ansible.builtin.command:
+        cmd: "wipefs -a {{ disk.target_disk }}"
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
+
+    - name: Create UEFI GPT partition table
+      ansible.builtin.command:
+        argv:
+          - parted
+          - --script
+          - "{{ disk.target_disk }}"
+          - mklabel
+          - gpt
+          - mkpart
+          - ESP
+          - fat32
+          - 1MiB
+          - 513MiB
+          - set
+          - "1"
+          - esp
+          - "on"
+          - mkpart
+          - primary
+          - "{{ disk.filesystem }}"
+          - 513MiB
+          - "100%"
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
+        - disk.is_uefi | bool
+
+    - name: Create BIOS MBR partition table
+      ansible.builtin.command:
+        argv:
+          - parted
+          - --script
+          - "{{ disk.target_disk }}"
+          - mklabel
+          - msdos
+          - mkpart
+          - primary
+          - "{{ disk.filesystem }}"
+          - 1MiB
+          - "100%"
+          - set
+          - "1"
+          - boot
+          - "on"
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
+        - not disk.is_uefi | bool
+
+    - name: Reload partition table
+      ansible.builtin.command:
+        argv:
+          - partprobe
+          - "{{ disk.target_disk }}"
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
+
+    - name: Format EFI partition
+      ansible.builtin.command:
+        cmd: "mkfs.vfat -F 32 {{ lgi_efi_partition }}"
+      when:
+        - not dry_run | bool
+        - disk.is_uefi | bool
+
+    - name: Format ext4 root partition
+      ansible.builtin.command:
+        cmd: "mkfs.ext4 -F {{ lgi_root_partition }}"
+      when:
+        - not dry_run | bool
+        - disk.filesystem == 'ext4'
+
+    - name: Format xfs or btrfs root partition
+      ansible.builtin.command:
+        cmd: "mkfs.{{ disk.filesystem }} -f {{ lgi_root_partition }}"
+      when:
+        - not dry_run | bool
+        - disk.filesystem in ['xfs', 'btrfs']
+
+    - name: Ensure Gentoo mountpoint exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}"
+        state: directory
+        mode: "0755"
+      when: not dry_run | bool
+
+    - name: Mount generated root partition
+      ansible.builtin.command:
+        cmd: "mount -t {{ disk.filesystem }} {{ lgi_root_partition }} {{ gentoo_mount }}"
+      when: not dry_run | bool
+
+    - name: Ensure EFI mountpoint exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}/efi"
+        state: directory
+        mode: "0755"
+      when:
+        - not dry_run | bool
+        - disk.is_uefi | bool
+
+    - name: Mount generated EFI partition
+      ansible.builtin.command:
+        cmd: "mount -t vfat {{ lgi_efi_partition }} {{ gentoo_mount }}/efi"
+      when:
+        - not dry_run | bool
+        - disk.is_uefi | bool
+
+    - name: Fetch stage3 latest index
+      ansible.builtin.uri:
+        url: "{{ stage3_base_url }}/{{ stage3_latest_file }}"
+        return_content: true
+      register: lgi_stage3_index
+      when: not dry_run | bool
+
+    - name: Collect matching stage3 tarballs
+      ansible.builtin.set_fact:
+        lgi_stage3_candidates: "{{ lgi_stage3_index.content.splitlines() | select('match', '^(?:\\S+/)?' ~ stage3_tarball_prefix ~ '\\S*\\.tar\\.xz\\s+[0-9]+$') | list }}"
+      when: not dry_run | bool
+
+    - name: Require a stage3 tarball entry
+      ansible.builtin.assert:
+        that:
+          - lgi_stage3_candidates | length > 0
+        fail_msg: "Could not find a {{ stage3_variant }} stage3 tarball in {{ stage3_base_url }}/{{ stage3_latest_file }}."
+      when: not dry_run | bool
+
+    - name: Select stage3 tarball path
+      ansible.builtin.set_fact:
+        lgi_stage3_relpath: "{{ (lgi_stage3_candidates | first).split()[0] }}"
+      when: not dry_run | bool
+
+    - name: Require selected stage3 matches init system
+      ansible.builtin.assert:
+        that:
+          - stage3_tarball_prefix in lgi_stage3_relpath
+        fail_msg: "Selected stage3 {{ lgi_stage3_relpath }} does not match init system {{ system.init_system }}."
+      when: not dry_run | bool
+
+    - name: Show selected stage3 tarball
+      ansible.builtin.debug:
+        msg: "{{ stage3_base_url }}/{{ lgi_stage3_relpath }}"
+      when: not dry_run | bool
+
+    - name: Download selected stage3
+      ansible.builtin.command:
+        argv:
+          - wget
+          - -O
+          - "{{ gentoo_mount }}/stage3.tar.xz"
+          - "{{ stage3_base_url }}/{{ lgi_stage3_relpath }}"
+      when: not dry_run | bool
+
+    - name: Extract stage3
+      ansible.builtin.command:
+        argv:
+          - tar
+          - xpf
+          - "{{ gentoo_mount }}/stage3.tar.xz"
+          - -C
+          - "{{ gentoo_mount }}"
+          - --xattrs-include=*
+          - --numeric-owner
+      when: not dry_run | bool
+
+    - name: Ensure Portage directory exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}/etc/portage"
+        state: directory
+        mode: "0755"
+      when: not dry_run | bool
+
+    - name: Install generated or imported make.conf
+      ansible.builtin.copy:
+        src: /tmp/lgi-gentoo/make.conf
+        dest: "{{ gentoo_mount }}/etc/portage/make.conf"
+        mode: "0644"
+      when: not dry_run | bool
+
+    - name: Copy LGI vars into target
+      ansible.builtin.copy:
+        src: /tmp/lgi-gentoo/vars.yml
+        dest: "{{ gentoo_mount }}/root/lgi-vars.yml"
+        mode: "0600"
+      when: not dry_run | bool
+
+    - name: Copy LGI make.conf into target root
+      ansible.builtin.copy:
+        src: /tmp/lgi-gentoo/make.conf
+        dest: "{{ gentoo_mount }}/root/lgi-make.conf"
+        mode: "0644"
+      when: not dry_run | bool
+
+    - name: Copy imported kernel config into target
+      ansible.builtin.copy:
+        src: "{{ kernel.saved_config_path }}"
+        dest: "{{ gentoo_mount }}/root/kernel.config"
+        mode: "0644"
+      when:
+        - not dry_run | bool
+        - kernel.saved_config_path is not none
+
+    - name: Copy LGI runner package into target
+      ansible.builtin.copy:
+        src: "{{ lgi_runner_package }}"
+        dest: "{{ gentoo_mount }}/root/lgi-gentoo-runner.tar.gz"
+        mode: "0644"
+      when: not dry_run | bool
+
+    - name: Extract LGI runner package in target
+      ansible.builtin.unarchive:
+        src: "{{ gentoo_mount }}/root/lgi-gentoo-runner.tar.gz"
+        dest: "{{ gentoo_mount }}/root"
+        remote_src: true
+      when: not dry_run | bool
+
+    - name: Copy LGI .config into extracted runner
+      ansible.builtin.copy:
+        src: "{{ lgi_dot_config }}"
+        dest: "{{ gentoo_mount }}/root/lgi-gentoo/.config"
+        mode: "0600"
+      when: not dry_run | bool
+
+    - name: Copy LGI vars into extracted runner
+      ansible.builtin.copy:
+        src: /tmp/lgi-gentoo/vars.yml
+        dest: "{{ gentoo_mount }}/root/lgi-gentoo/vars.yml"
+        mode: "0600"
+      when: not dry_run | bool
+
+    - name: Copy LGI make.conf into extracted runner
+      ansible.builtin.copy:
+        src: /tmp/lgi-gentoo/make.conf
+        dest: "{{ gentoo_mount }}/root/lgi-gentoo/make.conf"
+        mode: "0644"
+      when: not dry_run | bool
+
+    - name: Ensure proc mountpoint exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}/proc"
+        state: directory
+        mode: "0555"
+      when: not dry_run | bool
+
+    - name: Mount proc
+      ansible.builtin.command:
+        cmd: "mount -t proc proc {{ gentoo_mount }}/proc"
+      when: not dry_run | bool
+
+    - name: Ensure sys mountpoint exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}/sys"
+        state: directory
+        mode: "0555"
+      when: not dry_run | bool
+
+    - name: Bind mount sys
+      ansible.builtin.command:
+        cmd: "mount --rbind /sys {{ gentoo_mount }}/sys"
+      when: not dry_run | bool
+
+    - name: Ensure dev mountpoint exists
+      ansible.builtin.file:
+        path: "{{ gentoo_mount }}/dev"
+        state: directory
+        mode: "0755"
+      when: not dry_run | bool
+
+    - name: Bind mount dev
+      ansible.builtin.command:
+        cmd: "mount --rbind /dev {{ gentoo_mount }}/dev"
+      when: not dry_run | bool
+
+    - name: Copy resolver config
+      ansible.builtin.command:
+        argv:
+          - cp
+          - --dereference
+          - /etc/resolv.conf
+          - "{{ gentoo_mount }}/etc/resolv.conf"
+      when: not dry_run | bool
+
+    - name: Validate outside handoff files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ gentoo_mount }}/etc/portage/make.conf"
+        - "{{ gentoo_mount }}/etc/resolv.conf"
+        - "{{ gentoo_mount }}/root/lgi-vars.yml"
+        - "{{ gentoo_mount }}/root/lgi-make.conf"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/.config"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/vars.yml"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/make.conf"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/ansible.cfg"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/playbooks/chroot.yml"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/scripts/run_chroot_phase.sh"
+      register: lgi_handoff_files
+      when: not dry_run | bool
+
+    - name: Require outside handoff files
+      ansible.builtin.assert:
+        that:
+          - lgi_handoff_files.results | map(attribute='stat.exists') | min
+        fail_msg: "One or more required LGI handoff files were not copied into the target."
+      when: not dry_run | bool
+
+    - name: Hand off to chroot Ansible phase
+      ansible.builtin.command:
+        cmd: "chroot {{ gentoo_mount }} /root/lgi-gentoo/ansible/scripts/run_chroot_phase.sh"
+      when:
+        - not dry_run | bool
+        - lgi_run_chroot_phase | bool
+
+    - name: Outside phase complete and ready for chroot
+      ansible.builtin.debug:
+        msg:
+          - "Outside phase completed."
+          - "Gentoo root is mounted at {{ gentoo_mount }}."
+          - "Stage3 is extracted, make.conf and LGI files are copied, proc/sys/dev are mounted, and EFI systems have ESP mounted at {{ gentoo_mount }}/efi."
+          - "Chroot handoff is disabled until the chroot handbook playbook is implemented."
+      when:
+        - not dry_run | bool
+        - not lgi_run_chroot_phase | bool
+
+    - name: Dry-run complete
+      ansible.builtin.debug:
+        msg: "Outside playbook reached end in dry-run mode."
+      when: dry_run | bool

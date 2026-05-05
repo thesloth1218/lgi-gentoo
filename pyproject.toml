@@ -1,0 +1,7 @@
+[project]
+name = "lgi-gentoo"
+version = "0.1.0"
+description = "Larry's Gentoo Installer orchestrator"
+requires-python = ">=3.11"
+dependencies = [
+]

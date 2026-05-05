@@ -1,0 +1,168 @@
+mainmenu "Larry's Gentoo Installer"
+
+menu "Larry's Gentoo Installer"
+
+config LGI_DRY_RUN
+    bool "Dry-run mode"
+    default y
+
+choice
+    prompt "Disk setup mode"
+    default LGI_DISK_MANUAL
+
+config LGI_DISK_MANUAL
+    bool "Manual partitioning with cfdisk"
+
+config LGI_DISK_AUTO
+    bool "Automatic partition suggestion"
+
+endchoice
+
+config LGI_IS_UEFI
+    bool "UEFI boot detected"
+    default n
+
+config LGI_DISKMGMT
+    string "Disk management mode"
+    default "manual"
+
+config LGI_TARGET_DISK
+    string "Target disk"
+    default ""
+
+config LGI_ROOT_PARTITION
+    string "Root partition"
+    default ""
+
+config LGI_EFI_PARTITION
+    string "EFI system partition"
+    default ""
+
+config LGI_BOOT_MODE
+    string "Boot mode"
+    default "uefi"
+
+config LGI_PARTITION_TABLE
+    string "Partition table"
+    default "gpt"
+
+config LGI_AUTO_LAYOUT
+    string "Automatic partition layout"
+    default ""
+
+choice
+    prompt "Filesystem"
+    default LGI_FS_EXT4
+
+config LGI_FS_EXT4
+    bool "ext4"
+
+config LGI_FS_XFS
+    bool "xfs"
+
+config LGI_FS_BTRFS
+    bool "btrfs"
+
+endchoice
+
+choice
+    prompt "Init system"
+    default LGI_INIT_OPENRC
+
+config LGI_INIT_OPENRC
+    bool "OpenRC"
+
+config LGI_INIT_SYSTEMD
+    bool "systemd"
+
+endchoice
+
+config LGI_HOSTNAME
+    string "Hostname"
+    default "gentoo"
+
+config LGI_ROOT_PASSWORD
+    string "Root password"
+    default ""
+
+config LGI_TIMEZONE
+    string "Timezone"
+    default "UTC"
+
+config LGI_LOCALE
+    string "Locale"
+    default "en_US.UTF-8 UTF-8"
+
+config LGI_KEYMAP
+    string "Keymap"
+    default "us"
+
+config LGI_NETWORK_MANAGER
+    string "Network manager"
+    default "dhcpcd"
+
+config LGI_COMMON_FLAGS
+    string "COMMON_FLAGS"
+    default "-O2 -march=native -pipe"
+
+config LGI_MAKEOPTS
+    string "MAKEOPTS"
+    default "-j1"
+
+config LGI_VIDEO_CARDS
+    string "VIDEO_CARDS"
+    default "intel"
+
+config LGI_ACCEPT_LICENSE
+    string "ACCEPT_LICENSE"
+    default "*"
+
+config LGI_GRUB_PLATFORMS
+    string "GRUB_PLATFORMS"
+    default ""
+
+config LGI_MAKE_CONF_SOURCE
+    string "make.conf source"
+    default ""
+
+config LGI_MAKE_CONF_PATH
+    string "Imported make.conf path"
+    default ""
+
+config LGI_RUN_KERNEL_MENUCONFIG
+    bool "Run kernel make menuconfig later"
+    default n
+
+config LGI_KERNEL_USE_BINARY
+    bool "Use Gentoo binary kernel"
+    default y
+
+config LGI_KERNEL_USE_MANUAL
+    bool "Use Gentoo sources/manual kernel"
+    default n
+
+config LGI_KERNEL_PACKAGE
+    string "Kernel package"
+    default "sys-kernel/gentoo-kernel-bin"
+
+config LGI_KERNEL_CONFIG_SOURCE
+    string "Kernel .config source"
+    default ""
+
+config LGI_KERNEL_SOURCE_VERSION
+    string "Gentoo kernel source version"
+    default "7.0.1"
+
+config LGI_KERNEL_GENPATCHES_VERSION
+    string "Gentoo genpatches revision"
+    default "2"
+
+config LGI_KERNEL_EXPERIMENTAL_PATCHES
+    bool "Include Gentoo experimental kernel patches"
+    default n
+
+config LGI_KERNEL_CONFIG_PATH
+    string "Saved kernel .config path"
+    default ""
+
+endmenu

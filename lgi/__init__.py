@@ -1,0 +1,2 @@
+"""Larry's Gentoo Installer."""
+
