@@ -83,11 +83,10 @@ def _ensure_ansible(*, auto_build: bool, report: BootstrapReport) -> str:
         return _validated_ansible(str(BUNDLED_ANSIBLE))
 
     system_ansible = shutil.which("ansible-playbook")
-    if system_ansible:
-        report.actions.append(f"using system ansible-playbook at {system_ansible}")
-        return _validated_ansible(system_ansible)
-
     if not auto_build:
+        if system_ansible:
+            report.actions.append(f"using system ansible-playbook at {system_ansible}")
+            return _validated_ansible(system_ansible)
         raise BootstrapError(
             "ansible-playbook was not found and bundled Ansible is not built.\n"
             "Run `python3 main.py bootstrap` or `ansible/scripts/build_ansible_bundle.sh` first."
@@ -97,12 +96,12 @@ def _ensure_ansible(*, auto_build: bool, report: BootstrapReport) -> str:
     if not BUILD_SCRIPT.exists():
         raise BootstrapError(f"Missing Ansible bundle build script: {BUILD_SCRIPT}")
 
-    print("LGI bootstrap: ansible-playbook was not found; building bundled Ansible environment.", file=sys.stderr)
+    print("LGI bootstrap: building bundled Ansible environment for live CD and chroot use.", file=sys.stderr)
     result = subprocess.run(["sh", str(BUILD_SCRIPT)], cwd=ROOT, check=False)
     if result.returncode != 0:
         raise BootstrapError(
             "Could not build bundled Ansible environment.\n"
-            "The live environment needs network access and Python venv support, or the repo must already include .lgi-ansible."
+            "The live environment needs network access and Python venv support, or the runner package must already include .lgi-ansible."
         )
     if not BUNDLED_ANSIBLE.exists():
         raise BootstrapError(f"Ansible bundle build finished, but {BUNDLED_ANSIBLE} was not created.")

@@ -5,13 +5,376 @@
   become: true
   vars_files:
     - /root/lgi-vars.yml
+  vars:
+    lgi_runtime_dir: /tmp/lgi-gentoo
+    lgi_kernel_config_source: /root/kernel.config
+    lgi_kernel_config_staging: /tmp/lgi-gentoo/kernel.config
+    lgi_locale_line: "{{ system.locale }}"
+    lgi_locale_name: "{{ (system.locale.split() | first) | replace('UTF-8', 'utf8') | replace('utf-8', 'utf8') | replace('UTF8', 'utf8') }}"
+    lgi_installkernel_use: "{{ 'dracut grub systemd' if system.init_system == 'systemd' else 'dracut grub -systemd' }}"
+    lgi_make_jobs: "{{ system.make_opts | default('-j1', true) }}"
 
-  tasks:
-    - name: Chroot handoff placeholder
+  pre_tasks:
+    - name: Show chroot phase plan
       ansible.builtin.debug:
         msg:
-          - "Chroot Ansible phase reached."
-          - "profile={{ system.profile }}"
-          - "kernel_package={{ kernel.kernel_package }}"
-          - "network_manager={{ system.network_manager }}"
+          - "hostname={{ system.hostname }}"
+          - "locale={{ lgi_locale_line }}"
+          - "eselect_locale={{ lgi_locale_name }}"
+          - "timezone={{ system.timezone }}"
+          - "init_system={{ system.init_system }}"
+          - "manual_kernel_config={{ kernel.use_manual_kernel }}"
 
+    - name: Ensure bundled Ansible runs inside chroot
+      ansible.builtin.command:
+        argv:
+          - /root/lgi-gentoo/.lgi-ansible/bin/ansible-playbook
+          - --version
+      changed_when: false
+
+    - name: Check required chroot handoff files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/portage/make.conf
+        - /root/lgi-vars.yml
+        - /root/lgi-make.conf
+        - /root/lgi-gentoo/.config
+      register: lgi_chroot_handoff_files
+
+    - name: Require chroot handoff files
+      ansible.builtin.assert:
+        that:
+          - lgi_chroot_handoff_files.results | map(attribute='stat.exists') | min
+        fail_msg: "A required LGI handoff file is missing inside the chroot."
+
+    - name: Check EFI mount when required
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - /efi
+      changed_when: false
+      when: disk.is_uefi | bool
+
+    - name: Ensure LGI runtime directory exists
+      ansible.builtin.file:
+        path: "{{ lgi_runtime_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Check imported kernel config handoff
+      ansible.builtin.stat:
+        path: "{{ lgi_kernel_config_source }}"
+      register: lgi_kernel_config_handoff
+
+    - name: Stage imported kernel config for later kernel phase
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ lgi_kernel_config_source }}"
+          - "{{ lgi_kernel_config_staging }}"
+      when: lgi_kernel_config_handoff.stat.exists
+
+    - name: Check staged kernel config
+      ansible.builtin.stat:
+        path: "{{ lgi_kernel_config_staging }}"
+      register: lgi_kernel_config_staged
+
+    - name: Require staged kernel config for manual kernel mode
+      ansible.builtin.assert:
+        that:
+          - not kernel.use_manual_kernel | bool or lgi_kernel_config_staged.stat.exists
+        fail_msg: "Manual kernel mode requires a staged kernel config at {{ lgi_kernel_config_staging }}."
+
+  tasks:
+    - name: Set hostname
+      ansible.builtin.copy:
+        dest: /etc/hostname
+        content: "{{ system.hostname }}\n"
+        mode: "0644"
+
+    - name: Set OpenRC hostname config
+      ansible.builtin.copy:
+        dest: /etc/conf.d/hostname
+        content: "hostname=\"{{ system.hostname }}\"\n"
+        mode: "0644"
+      when: system.init_system == 'openrc'
+
+    - name: Set hosts file
+      ansible.builtin.copy:
+        dest: /etc/hosts
+        content: |
+          127.0.0.1 localhost
+          ::1       localhost
+          127.0.1.1 {{ system.hostname }}.localdomain {{ system.hostname }}
+        mode: "0644"
+
+    - name: Configure locale.gen
+      ansible.builtin.lineinfile:
+        path: /etc/locale.gen
+        regexp: "^#?\\s*{{ lgi_locale_line | regex_escape }}$"
+        line: "{{ lgi_locale_line }}"
+        create: true
+        mode: "0644"
+
+    - name: Generate locales
+      ansible.builtin.command:
+        argv:
+          - locale-gen
+
+    - name: Select system locale
+      ansible.builtin.command:
+        argv:
+          - eselect
+          - locale
+          - set
+          - "{{ lgi_locale_name }}"
+
+    - name: Persist LANG for reloaded shells
+      ansible.builtin.copy:
+        dest: /etc/env.d/02locale
+        content: "LANG=\"{{ lgi_locale_name }}\"\n"
+        mode: "0644"
+
+    - name: Reload environment
+      ansible.builtin.command:
+        argv:
+          - env-update
+
+    - name: Verify locale in a reloaded shell
+      ansible.builtin.shell: |
+        set -eu
+        . /etc/profile
+        locale | grep -q '^LANG={{ lgi_locale_name }}$'
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Set timezone file
+      ansible.builtin.copy:
+        dest: /etc/timezone
+        content: "{{ system.timezone }}\n"
+        mode: "0644"
+
+    - name: Check zoneinfo file
+      ansible.builtin.stat:
+        path: "/usr/share/zoneinfo/{{ system.timezone }}"
+      register: lgi_zoneinfo
+
+    - name: Require zoneinfo file
+      ansible.builtin.assert:
+        that:
+          - lgi_zoneinfo.stat.exists
+        fail_msg: "Timezone {{ system.timezone }} does not exist under /usr/share/zoneinfo."
+
+    - name: Set localtime
+      ansible.builtin.copy:
+        src: "/usr/share/zoneinfo/{{ system.timezone }}"
+        dest: /etc/localtime
+        remote_src: true
+        mode: "0644"
+
+    - name: Initialize systemd machine-id
+      ansible.builtin.command:
+        argv:
+          - systemd-machine-id-setup
+      changed_when: false
+      when: system.init_system == 'systemd'
+
+    - name: Verify systemd tooling
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - --version
+      changed_when: false
+      when: system.init_system == 'systemd'
+
+    - name: Install LGI emerge wrapper
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/lgi-emerge
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -u
+          if [ -w /dev/tty ]; then
+              set -o pipefail
+              emerge -v "$@" 2>&1 | tee /dev/tty
+              exit "${PIPESTATUS[0]}"
+          fi
+          exec emerge -v "$@"
+
+    - name: Run initial Portage tree sync
+      ansible.builtin.command:
+        argv:
+          - emerge-webrsync
+
+    - name: Install cpuid2cpuflags
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - --oneshot
+          - --noreplace
+          - app-portage/cpuid2cpuflags
+
+    - name: Ensure package.use directory exists
+      ansible.builtin.file:
+        path: /etc/portage/package.use
+        state: directory
+        mode: "0755"
+
+    - name: Write CPU flags package.use file
+      ansible.builtin.shell: |
+        set -eu
+        cpuid2cpuflags |
+          sed -n 's/^\(CPU_FLAGS_[A-Z0-9_]*\)="\(.*\)"$/*\/* \1: \2/p' \
+          > /etc/portage/package.use/00cpu-flags
+        test -s /etc/portage/package.use/00cpu-flags
+      args:
+        executable: /bin/bash
+
+    - name: Set root password
+      ansible.builtin.command:
+        argv:
+          - chpasswd
+        stdin: "root:{{ system.root_password }}"
+      no_log: true
+      when: system.root_password is not none
+
+    - name: Install genfstab
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - --oneshot
+          - --noreplace
+          - sys-fs/genfstab
+
+    - name: Check existing fstab
+      ansible.builtin.stat:
+        path: /etc/fstab
+      register: lgi_existing_fstab
+
+    - name: Back up existing fstab
+      ansible.builtin.copy:
+        src: /etc/fstab
+        dest: /etc/fstab.lgi-pre-genfstab
+        remote_src: true
+        force: false
+        mode: "0644"
+      when: lgi_existing_fstab.stat.exists
+
+    - name: Generate fstab from current mounts
+      ansible.builtin.shell: |
+        set -eu
+        : > /etc/fstab
+        genfstab / >> /etc/fstab
+        test -s /etc/fstab
+      args:
+        executable: /bin/bash
+
+    - name: Configure installkernel USE flags
+      ansible.builtin.copy:
+        dest: /etc/portage/package.use/installkernel
+        content: "sys-kernel/installkernel {{ lgi_installkernel_use }}\n"
+        mode: "0644"
+
+    - name: Install installkernel and firmware prerequisites
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - --oneshot
+          - --noreplace
+          - sys-kernel/installkernel
+          - sys-kernel/dracut
+          - sys-kernel/linux-firmware
+
+    - name: Install binary distribution kernel
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - "{{ kernel.kernel_package }}"
+      when: kernel.use_binary_kernel | bool
+
+    - name: Install Gentoo kernel sources
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - sys-kernel/gentoo-sources
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Select latest Gentoo sources
+      ansible.builtin.shell: |
+        set -eu
+        kernel_index="$(
+          eselect kernel list |
+            awk '/linux-.*gentoo/ { gsub(/\[|\]/, "", $1); selected=$1 } END { if (selected) print selected; else exit 1 }'
+        )"
+        eselect kernel set "${kernel_index}"
+        test -e /usr/src/linux/Makefile
+      args:
+        executable: /bin/bash
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Copy staged kernel config into selected source tree
+      ansible.builtin.copy:
+        src: "{{ lgi_kernel_config_staging }}"
+        dest: /usr/src/linux/.config
+        remote_src: true
+        mode: "0644"
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Prepare manual kernel config
+      ansible.builtin.shell: |
+        set -eu
+        cd /usr/src/linux
+        make olddefconfig
+      args:
+        executable: /bin/bash
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Build manual kernel
+      ansible.builtin.shell: |
+        set -eu
+        cd /usr/src/linux
+        if [ -w /dev/tty ]; then
+            set -o pipefail
+            make {{ lgi_make_jobs }} 2>&1 | tee /dev/tty
+            exit "${PIPESTATUS[0]}"
+        fi
+        make {{ lgi_make_jobs }}
+      args:
+        executable: /bin/bash
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Install manual kernel modules
+      ansible.builtin.shell: |
+        set -eu
+        cd /usr/src/linux
+        if [ -w /dev/tty ]; then
+            set -o pipefail
+            make modules_install 2>&1 | tee /dev/tty
+            exit "${PIPESTATUS[0]}"
+        fi
+        make modules_install
+      args:
+        executable: /bin/bash
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Install manual kernel with installkernel
+      ansible.builtin.shell: |
+        set -eu
+        cd /usr/src/linux
+        if [ -w /dev/tty ]; then
+            set -o pipefail
+            make install 2>&1 | tee /dev/tty
+            exit "${PIPESTATUS[0]}"
+        fi
+        make install
+      args:
+        executable: /bin/bash
+      when: not kernel.use_binary_kernel | bool
+
+    - name: Stop before bootloader phase
+      ansible.builtin.debug:
+        msg:
+          - "Chroot setup complete through kernel installation."
+          - "GRUB install, grub.cfg generation, services, and final install tasks are intentionally not implemented yet."

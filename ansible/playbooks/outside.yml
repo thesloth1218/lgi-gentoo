@@ -9,7 +9,7 @@
     gentoo_mount: /mnt/gentoo
     lgi_dot_config: "{{ playbook_dir }}/../../.config"
     lgi_runner_package: /tmp/lgi-gentoo/lgi-gentoo-runner.tar.gz
-    lgi_run_chroot_phase: false
+    lgi_run_chroot_phase: true
     stage3_base_url: https://distfiles.gentoo.org/releases/amd64/autobuilds
     stage3_variant: "{{ 'systemd' if system.init_system == 'systemd' else 'openrc' }}"
     stage3_latest_file: "latest-stage3-amd64-{{ stage3_variant }}.txt"
@@ -397,6 +397,7 @@
         - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/ansible.cfg"
         - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/playbooks/chroot.yml"
         - "{{ gentoo_mount }}/root/lgi-gentoo/ansible/scripts/run_chroot_phase.sh"
+        - "{{ gentoo_mount }}/root/lgi-gentoo/.lgi-ansible/bin/ansible-playbook"
       register: lgi_handoff_files
       when: not dry_run | bool
 
@@ -407,9 +408,21 @@
         fail_msg: "One or more required LGI handoff files were not copied into the target."
       when: not dry_run | bool
 
+    - name: Rest before chroot handoff
+      ansible.builtin.pause:
+        seconds: 5
+      when:
+        - not dry_run | bool
+        - lgi_run_chroot_phase | bool
+
     - name: Hand off to chroot Ansible phase
       ansible.builtin.command:
-        cmd: "chroot {{ gentoo_mount }} /root/lgi-gentoo/ansible/scripts/run_chroot_phase.sh"
+        argv:
+          - chroot
+          - "{{ gentoo_mount }}"
+          - /bin/bash
+          - -lc
+          - "cd /root/lgi-gentoo && exec ansible/scripts/run_chroot_phase.sh"
       when:
         - not dry_run | bool
         - lgi_run_chroot_phase | bool
