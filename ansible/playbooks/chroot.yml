@@ -193,14 +193,6 @@
       changed_when: false
       when: system.init_system == 'systemd'
 
-    - name: Select Gentoo profile
-      ansible.builtin.command:
-        argv:
-          - eselect
-          - profile
-          - set
-          - "{{ lgi_profile }}"
-
     - name: Persist console keymap for OpenRC
       ansible.builtin.copy:
         dest: /etc/conf.d/keymaps
@@ -239,6 +231,14 @@
       ansible.builtin.command:
         argv:
           - emerge-webrsync
+
+    - name: Select Gentoo profile
+      ansible.builtin.command:
+        argv:
+          - eselect
+          - profile
+          - set
+          - "{{ lgi_profile }}"
 
     - name: Install cpuid2cpuflags
       ansible.builtin.command:
