@@ -332,6 +332,30 @@
       args:
         executable: /bin/bash
 
+    - name: Read root filesystem UUID
+      ansible.builtin.command:
+        argv:
+          - blkid
+          - -s
+          - UUID
+          - -o
+          - value
+          - "{{ disk.root_partition }}"
+      register: lgi_root_uuid
+      changed_when: false
+
+    - name: Require root filesystem UUID
+      ansible.builtin.assert:
+        that:
+          - lgi_root_uuid.stdout | trim | length > 0
+        fail_msg: "Could not determine UUID for root partition {{ disk.root_partition }}."
+
+    - name: Configure installkernel command line for chroot kernel deployment
+      ansible.builtin.copy:
+        dest: /etc/cmdline
+        content: "root=UUID={{ lgi_root_uuid.stdout | trim }} rootfstype={{ disk.filesystem }} rootwait rw\n"
+        mode: "0644"
+
     - name: Configure installkernel USE flags
       ansible.builtin.copy:
         dest: /etc/portage/package.use/installkernel
