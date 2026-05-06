@@ -3,6 +3,10 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 export ANSIBLE_FORCE_COLOR=1
 export TERM=${TERM:-xterm-256color}
+if [ -z "${LGI_TTY:-}" ] && [ -t 1 ]; then
+    LGI_TTY="$(tty)"
+    export LGI_TTY
+fi
 
 mkdir -p /var/log
 exec > >(tee -a /var/log/chroot-ansible.log) 2>&1
@@ -14,7 +18,7 @@ export ANSIBLE_LOCAL_TEMP=/tmp/lgi-gentoo/ansible-local-tmp
 export ANSIBLE_REMOTE_TEMP=/tmp/lgi-gentoo/ansible-remote-tmp
 export TMPDIR=/tmp/lgi-gentoo
 export ANSIBLE_STDOUT_CALLBACK=default
-export ANSIBLE_DISPLAY_ARGS_TO_STDOUT=True
+export ANSIBLE_DISPLAY_ARGS_TO_STDOUT=False
 export ANSIBLE_LOAD_CALLBACK_PLUGINS=True
 
 mkdir -p "$ANSIBLE_LOCAL_TEMP" "$ANSIBLE_REMOTE_TEMP" "$TMPDIR"
@@ -28,4 +32,4 @@ else
     ANSIBLE_PLAYBOOK=ansible-playbook
 fi
 
-exec "$ANSIBLE_PLAYBOOK" -v -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml
+exec "$ANSIBLE_PLAYBOOK" -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml

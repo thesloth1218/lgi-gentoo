@@ -15,6 +15,7 @@
     stage3_latest_file: "latest-stage3-amd64-{{ stage3_variant }}.txt"
     stage3_tarball_prefix: "stage3-amd64-{{ stage3_variant }}-"
     lgi_profile: "{{ 'default/linux/amd64/23.0/systemd' if system.init_system == 'systemd' else 'default/linux/amd64/23.0' }}"
+    lgi_output_target: "{{ lookup('ansible.builtin.env', 'LGI_TTY') | default('', true) }}"
 
   pre_tasks:
     - name: Show dry-run mode
@@ -53,6 +54,7 @@
         - tar
         - cp
         - mount
+        - umount
       changed_when: false
       when: not dry_run | bool
 
@@ -94,6 +96,20 @@
         lgi_part_prefix: "{{ 'p' if (disk.target_disk | default('')) is regex('[0-9]$') else '' }}"
         lgi_efi_partition: "{{ (disk.efi_partition | default('', true)) if (disk.efi_partition | default('', true) | length > 0) else (disk.target_disk ~ ('p' if (disk.target_disk | default('')) is regex('[0-9]$') else '') ~ '1') }}"
         lgi_root_partition: "{{ (disk.root_partition | default('', true)) if (disk.root_partition | default('', true) | length > 0) else (disk.target_disk ~ ('p' if (disk.target_disk | default('')) is regex('[0-9]$') else '') ~ (2 if disk.is_uefi else 1)) }}"
+
+    - name: Lazily unmount stale auto-install mounts
+      ansible.builtin.command:
+        argv:
+          - umount
+          - -l
+          - "{{ item }}"
+      loop: "{{ [gentoo_mount ~ '/dev', gentoo_mount ~ '/sys', gentoo_mount ~ '/proc', gentoo_mount ~ '/efi', gentoo_mount, lgi_efi_partition, lgi_root_partition] | unique }}"
+      register: lgi_auto_unmounts
+      changed_when: lgi_auto_unmounts.rc == 0
+      failed_when: false
+      when:
+        - not dry_run | bool
+        - disk.diskmgmt == 'auto'
 
     - name: Wipe existing filesystem signatures
       ansible.builtin.command:
@@ -423,7 +439,11 @@
         : > "${log_path}"
 
         tail_pid=""
-        if [ -w /dev/tty ]; then
+        output_target="{{ lgi_output_target }}"
+        if [ -n "${output_target}" ] && [ -w "${output_target}" ]; then
+            tail -n +1 -F "${log_path}" > "${output_target}" &
+            tail_pid="$!"
+        elif [ -w /dev/tty ]; then
             tail -n +1 -F "${log_path}" > /dev/tty &
             tail_pid="$!"
         fi
@@ -449,7 +469,7 @@
           - "Outside phase completed."
           - "Gentoo root is mounted at {{ gentoo_mount }}."
           - "Stage3 is extracted, make.conf and LGI files are copied, proc/sys/dev are mounted, and EFI systems have ESP mounted at {{ gentoo_mount }}/efi."
-          - "Chroot handoff is disabled until the chroot handbook playbook is implemented."
+          - "The Python runner will start the chroot phase directly so its output is streamed instead of captured by this playbook."
       when:
         - not dry_run | bool
         - not lgi_run_chroot_phase | bool

@@ -12,6 +12,7 @@ OUTSIDE_PLAYBOOK = ANSIBLE_DIR / "playbooks" / "outside.yml"
 LOCAL_INVENTORY = ANSIBLE_DIR / "inventory" / "local.ini"
 BUNDLED_ANSIBLE = ROOT / ".lgi-ansible" / "bin" / "ansible-playbook"
 DEFAULT_PACKAGE = Path("/tmp/lgi-gentoo/lgi-gentoo-runner.tar.gz")
+DEFAULT_GENTOO_MOUNT = Path("/mnt/gentoo")
 
 
 class AnsibleRunnerError(RuntimeError):
@@ -33,8 +34,35 @@ def run_outside_playbook(extra_args: list[str] | None = None) -> int:
     command.extend(_verbosity_args(extra_args))
     if extra_args:
         command.extend(extra_args)
+    command.extend(["-e", "lgi_run_chroot_phase=false"])
 
     env = ansible_environment()
+    _set_terminal_env(env)
+    rc = subprocess.run(command, cwd=ROOT, env=env, check=False).returncode
+    if rc != 0 or _vars_dry_run():
+        return rc
+
+    return run_chroot_phase()
+
+
+def run_chroot_phase(gentoo_mount: Path = DEFAULT_GENTOO_MOUNT) -> int:
+    chroot_script = gentoo_mount / "root/lgi-gentoo/ansible/scripts/run_chroot_phase.sh"
+    if not chroot_script.exists():
+        raise AnsibleRunnerError(
+            f"{chroot_script} does not exist. The outside playbook did not finish copying LGI into the target."
+        )
+
+    env = ansible_environment()
+    _set_terminal_env(env)
+
+    print("Starting chroot Ansible phase...")
+    command = [
+        "chroot",
+        str(gentoo_mount),
+        "/bin/bash",
+        "-lc",
+        "cd /root/lgi-gentoo && exec ansible/scripts/run_chroot_phase.sh",
+    ]
     return subprocess.run(command, cwd=ROOT, env=env, check=False).returncode
 
 
@@ -45,7 +73,7 @@ def ansible_environment() -> dict[str, str]:
     env.setdefault("ANSIBLE_REMOTE_TEMP", "/tmp/lgi-gentoo/ansible-remote-tmp")
     env.setdefault("TMPDIR", "/tmp/lgi-gentoo")
     env.setdefault("ANSIBLE_STDOUT_CALLBACK", "default")
-    env.setdefault("ANSIBLE_DISPLAY_ARGS_TO_STDOUT", "True")
+    env.setdefault("ANSIBLE_DISPLAY_ARGS_TO_STDOUT", "False")
     env.setdefault("ANSIBLE_LOAD_CALLBACK_PLUGINS", "True")
     return env
 
@@ -53,7 +81,24 @@ def ansible_environment() -> dict[str, str]:
 def _verbosity_args(extra_args: list[str] | None) -> list[str]:
     if extra_args and any(arg == "-v" or arg.startswith("-vv") or arg == "--verbose" for arg in extra_args):
         return []
-    return ["-v"]
+    return []
+
+
+def _vars_dry_run() -> bool:
+    for line in VARS_PATH.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("dry_run:"):
+            return line.split(":", 1)[1].strip().lower() == "true"
+    return True
+
+
+def _set_terminal_env(env: dict[str, str]) -> None:
+    if env.get("LGI_TTY"):
+        return
+    try:
+        if os.isatty(1):
+            env["LGI_TTY"] = os.ttyname(1)
+    except OSError:
+        pass
 
 
 def package_runner(output_path: Path = DEFAULT_PACKAGE) -> Path:

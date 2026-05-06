@@ -13,6 +13,7 @@
     lgi_locale_name: "{{ (system.locale.split() | first) | replace('UTF-8', 'utf8') | replace('utf-8', 'utf8') | replace('UTF8', 'utf8') }}"
     lgi_installkernel_use: "{{ 'dracut grub systemd' if system.init_system == 'systemd' else 'dracut grub -systemd' }}"
     lgi_make_jobs: "{{ system.make_opts | default('-j1', true) }}"
+    lgi_output_target: "{{ lookup('ansible.builtin.env', 'LGI_TTY') | default('', true) }}"
 
   pre_tasks:
     - name: Show chroot phase plan
@@ -196,6 +197,12 @@
         content: |
           #!/bin/bash
           set -u
+          lgi_output_target="{{ lgi_output_target }}"
+          if [ -n "${lgi_output_target}" ] && [ -w "${lgi_output_target}" ]; then
+              set -o pipefail
+              emerge -v "$@" 2>&1 | tee "${lgi_output_target}"
+              exit "${PIPESTATUS[0]}"
+          fi
           if [ -w /dev/tty ]; then
               set -o pipefail
               emerge -v "$@" 2>&1 | tee /dev/tty
@@ -225,10 +232,33 @@
     - name: Write CPU flags package.use file
       ansible.builtin.shell: |
         set -eu
-        cpuid2cpuflags |
-          sed -n 's/^\(CPU_FLAGS_[A-Z0-9_]*\)="\(.*\)"$/*\/* \1: \2/p' \
-          > /etc/portage/package.use/00cpu-flags
-        test -s /etc/portage/package.use/00cpu-flags
+        output="$(cpuid2cpuflags)"
+        printf '%s\n' "${output}" |
+          awk '
+            /^\*\/\* CPU_FLAGS_[A-Z0-9_]+:/ {
+              print
+              found = 1
+              next
+            }
+            /^CPU_FLAGS_[A-Z0-9_]+:/ {
+              print "*/* " $0
+              found = 1
+              next
+            }
+            /^CPU_FLAGS_[A-Z0-9_]+="/ {
+              name = $0
+              sub(/=.*/, "", name)
+              flags = $0
+              sub(/^[^=]+="/, "", flags)
+              sub(/"$/, "", flags)
+              print "*/* " name ": " flags
+              found = 1
+            }
+            END { exit found ? 0 : 1 }
+          ' > /etc/portage/package.use/00cpu-flags || {
+            printf '%s\n' "# cpuid2cpuflags produced no CPU_FLAGS entries." \
+              > /etc/portage/package.use/00cpu-flags
+          }
       args:
         executable: /bin/bash
 
@@ -335,6 +365,12 @@
       ansible.builtin.shell: |
         set -eu
         cd /usr/src/linux
+        lgi_output_target="{{ lgi_output_target }}"
+        if [ -n "${lgi_output_target}" ] && [ -w "${lgi_output_target}" ]; then
+            set -o pipefail
+            make {{ lgi_make_jobs }} 2>&1 | tee "${lgi_output_target}"
+            exit "${PIPESTATUS[0]}"
+        fi
         if [ -w /dev/tty ]; then
             set -o pipefail
             make {{ lgi_make_jobs }} 2>&1 | tee /dev/tty
@@ -349,6 +385,12 @@
       ansible.builtin.shell: |
         set -eu
         cd /usr/src/linux
+        lgi_output_target="{{ lgi_output_target }}"
+        if [ -n "${lgi_output_target}" ] && [ -w "${lgi_output_target}" ]; then
+            set -o pipefail
+            make modules_install 2>&1 | tee "${lgi_output_target}"
+            exit "${PIPESTATUS[0]}"
+        fi
         if [ -w /dev/tty ]; then
             set -o pipefail
             make modules_install 2>&1 | tee /dev/tty
@@ -363,6 +405,12 @@
       ansible.builtin.shell: |
         set -eu
         cd /usr/src/linux
+        lgi_output_target="{{ lgi_output_target }}"
+        if [ -n "${lgi_output_target}" ] && [ -w "${lgi_output_target}" ]; then
+            set -o pipefail
+            make install 2>&1 | tee "${lgi_output_target}"
+            exit "${PIPESTATUS[0]}"
+        fi
         if [ -w /dev/tty ]; then
             set -o pipefail
             make install 2>&1 | tee /dev/tty
