@@ -33,7 +33,4 @@ On the live CD, extract and run it:
 tar xzf lgi-gentoo-runner.tar.gz
 cd lgi-gentoo
 python3 main.py
-```
-
-```
 
