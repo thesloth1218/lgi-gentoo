@@ -55,7 +55,7 @@ class SystemConfig:
     common_flags: str = "-O2 -march=native -pipe"
     video_cards: List[str] = field(default_factory=lambda: ["intel"])
     accept_license: str = "*"
-    grub_platforms: List[str] = field(default_factory=list)
+    grub_platforms: List[str] = field(default_factory=lambda: ["pc"])
     make_conf_source: Optional[str] = None
     make_conf_path: Optional[str] = None
     network_manager: str = "dhcpcd"

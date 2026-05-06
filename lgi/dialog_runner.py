@@ -39,7 +39,7 @@ class DialogInstaller:
                 hostname="gentoo",
                 timezone="UTC",
                 locale="en_US.UTF-8 UTF-8",
-                grub_platforms=["efi-64"] if is_uefi else [],
+                grub_platforms=["efi-64"] if is_uefi else ["pc"],
             ),
             dry_run=True,
         )
@@ -718,7 +718,7 @@ class DialogInstaller:
             return vars_path, make_path
 
         if returncode == 0:
-            _dialog_msgbox("Install phase complete", "Ansible outside playbook completed successfully.", height="8", width="70")
+            self._post_install_menu()
         else:
             _dialog_msgbox(
                 "Install phase failed",
@@ -814,6 +814,8 @@ class DialogInstaller:
                 _layout_text, partitions = _partition_layout_text(self.config.disk.target_disk)
                 if partitions and not _has_efi_system_partition(partitions):
                     errors.append("UEFI manual disk mode did not detect an EFI System Partition on the selected disk.")
+        if not self.config.disk.is_uefi and not self.config.disk.target_disk:
+            errors.append("BIOS/MBR GRUB installation requires the target disk, for example /dev/sda.")
         if self.config.system.make_conf_path and not Path(self.config.system.make_conf_path).exists():
             errors.append(f"Imported make.conf no longer exists: {self.config.system.make_conf_path}")
         if self.config.kernel.saved_config_path and not Path(self.config.kernel.saved_config_path).exists():
@@ -821,6 +823,49 @@ class DialogInstaller:
         if not self.config.kernel.use_binary_kernel and not self.config.kernel.saved_config_path:
             errors.append("Manual kernel mode requires an imported kernel .config.")
         return errors
+
+    def _post_install_menu(self) -> None:
+        while True:
+            action = _dialog(
+                [
+                    "--title",
+                    "Install complete",
+                    "--cancel-label",
+                    "Exit",
+                    "--menu",
+                    "LGI produced a bootable Gentoo install. Choose what to do next.",
+                    "14",
+                    "76",
+                    "4",
+                    "reboot",
+                    "Reboot now",
+                    "chroot",
+                    "Enter the installed system chroot",
+                    "qol",
+                    "Apply simple QOL tweaks",
+                    "exit",
+                    "Return to shell",
+                ],
+                cancel_value="exit",
+            )
+            if action == "reboot":
+                if _dialog_yesno("Reboot", "Reboot the live environment now?", default_yes=False):
+                    subprocess.run(["clear"], check=False)
+                    subprocess.run(["reboot"], check=False)
+                return
+            if action == "chroot":
+                subprocess.run(["clear"], check=False)
+                subprocess.run(["chroot", "/mnt/gentoo", "/bin/bash", "-l"], check=False)
+                continue
+            if action == "qol":
+                _dialog_msgbox(
+                    "QOL tweaks",
+                    "This menu item is reserved for a later LGI step.",
+                    height="8",
+                    width="64",
+                )
+                continue
+            return
 
 
 def run_dialog_installer() -> tuple[Path, Path]:

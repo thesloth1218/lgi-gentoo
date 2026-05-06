@@ -119,7 +119,7 @@ config LGI_ACCEPT_LICENSE
 
 config LGI_GRUB_PLATFORMS
     string "GRUB_PLATFORMS"
-    default ""
+    default "pc"
 
 config LGI_MAKE_CONF_SOURCE
     string "make.conf source"

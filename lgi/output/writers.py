@@ -106,8 +106,8 @@ def _make_conf(config: InstallerConfig) -> str:
 def _augment_make_conf(text: str, config: InstallerConfig) -> str:
     lines = text.rstrip().splitlines()
     _ensure_make_conf_var(lines, "ACCEPT_LICENSE", config.system.accept_license)
-    if config.disk.is_uefi:
-        _ensure_make_conf_var(lines, "GRUB_PLATFORMS", " ".join(config.system.grub_platforms or ["efi-64"]))
+    grub_platforms = config.system.grub_platforms or (["efi-64"] if config.disk.is_uefi else ["pc"])
+    _ensure_make_conf_var(lines, "GRUB_PLATFORMS", " ".join(grub_platforms))
     return "\n".join(lines + [""])
 
 

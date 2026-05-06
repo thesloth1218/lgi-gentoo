@@ -66,7 +66,7 @@ def load_installer_config(config_path: Path = CONFIG_PATH) -> InstallerConfig:
         common_flags=_string(values, "LGI_COMMON_FLAGS", "-O2 -march=native -pipe"),
         video_cards=_string(values, "LGI_VIDEO_CARDS", "intel").split(),
         accept_license=_string(values, "LGI_ACCEPT_LICENSE", "*"),
-        grub_platforms=_string(values, "LGI_GRUB_PLATFORMS", "efi-64" if disk.is_uefi else "").split(),
+        grub_platforms=_string(values, "LGI_GRUB_PLATFORMS", "efi-64" if disk.is_uefi else "pc").split(),
         make_conf_source=_string(values, "LGI_MAKE_CONF_SOURCE", "") or None,
         make_conf_path=_string(values, "LGI_MAKE_CONF_PATH", "") or None,
         network_manager=_string(values, "LGI_NETWORK_MANAGER", "dhcpcd"),

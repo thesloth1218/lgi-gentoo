@@ -14,6 +14,9 @@
     lgi_installkernel_use: "{{ 'dracut grub systemd' if system.init_system == 'systemd' else 'dracut grub -systemd' }}"
     lgi_make_jobs: "{{ system.make_opts | default('-j1', true) }}"
     lgi_output_target: "{{ lookup('ansible.builtin.env', 'LGI_TTY') | default('', true) }}"
+    lgi_profile: "{{ 'default/linux/amd64/23.0/systemd' if system.init_system == 'systemd' else 'default/linux/amd64/23.0' }}"
+    lgi_grub_platform: "{{ 'efi-64' if disk.is_uefi | bool else 'pc' }}"
+    lgi_grub_target: "{{ 'x86_64-efi' if disk.is_uefi | bool else 'i386-pc' }}"
 
   pre_tasks:
     - name: Show chroot phase plan
@@ -190,6 +193,28 @@
       changed_when: false
       when: system.init_system == 'systemd'
 
+    - name: Select Gentoo profile
+      ansible.builtin.command:
+        argv:
+          - eselect
+          - profile
+          - set
+          - "{{ lgi_profile }}"
+
+    - name: Persist console keymap for OpenRC
+      ansible.builtin.copy:
+        dest: /etc/conf.d/keymaps
+        content: "keymap=\"{{ system.keymap }}\"\n"
+        mode: "0644"
+      when: system.init_system == 'openrc'
+
+    - name: Persist console keymap for systemd
+      ansible.builtin.copy:
+        dest: /etc/vconsole.conf
+        content: "KEYMAP={{ system.keymap }}\n"
+        mode: "0644"
+      when: system.init_system == 'systemd'
+
     - name: Install LGI emerge wrapper
       ansible.builtin.copy:
         dest: /usr/local/sbin/lgi-emerge
@@ -222,6 +247,12 @@
           - --oneshot
           - --noreplace
           - app-portage/cpuid2cpuflags
+
+    - name: Install dhcpcd networking
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - net-misc/dhcpcd
 
     - name: Ensure package.use directory exists
       ansible.builtin.file:
@@ -421,8 +452,125 @@
         executable: /bin/bash
       when: not kernel.use_binary_kernel | bool
 
-    - name: Stop before bootloader phase
+    - name: Ensure GRUB platform is configured
+      ansible.builtin.lineinfile:
+        path: /etc/portage/make.conf
+        regexp: "^GRUB_PLATFORMS="
+        line: 'GRUB_PLATFORMS="{{ lgi_grub_platform }}"'
+        create: true
+        mode: "0644"
+
+    - name: Install GRUB
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - --update
+          - --newuse
+          - sys-boot/grub
+
+    - name: Install efibootmgr for UEFI systems
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/lgi-emerge
+          - sys-boot/efibootmgr
+      when: disk.is_uefi | bool
+
+    - name: Enable dhcpcd for OpenRC
+      ansible.builtin.command:
+        argv:
+          - rc-update
+          - add
+          - dhcpcd
+          - default
+      when: system.init_system == 'openrc'
+
+    - name: Enable dhcpcd for systemd
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - enable
+          - dhcpcd.service
+      when: system.init_system == 'systemd'
+
+    - name: Verify EFI mount before GRUB install
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - /efi
+      changed_when: false
+      when: disk.is_uefi | bool
+
+    - name: Install GRUB for UEFI
+      ansible.builtin.shell: |
+        set -eu
+        if ! grub-install --target={{ lgi_grub_target }} --efi-directory=/efi --bootloader-id=Gentoo --recheck; then
+            echo "Primary UEFI NVRAM GRUB install failed; installing removable fallback." >&2
+        fi
+        grub-install --target={{ lgi_grub_target }} --efi-directory=/efi --bootloader-id=Gentoo --removable --no-nvram --recheck
+      args:
+        executable: /bin/bash
+      when: disk.is_uefi | bool
+
+    - name: Verify BIOS target disk exists
+      ansible.builtin.command:
+        argv:
+          - test
+          - -b
+          - "{{ disk.target_disk }}"
+      changed_when: false
+      when: not disk.is_uefi | bool
+
+    - name: Install GRUB for BIOS or MBR
+      ansible.builtin.command:
+        argv:
+          - grub-install
+          - --target={{ lgi_grub_target }}
+          - --recheck
+          - "{{ disk.target_disk }}"
+      when: not disk.is_uefi | bool
+
+    - name: Generate GRUB configuration
+      ansible.builtin.command:
+        argv:
+          - grub-mkconfig
+          - -o
+          - /boot/grub/grub.cfg
+
+    - name: Verify boot artifacts
+      ansible.builtin.shell: |
+        set -eu
+        test -s /boot/grub/grub.cfg
+        find /boot -maxdepth 1 -type f \( -name 'vmlinuz-*' -o -name 'kernel-*' \) -print -quit | grep -q .
+        find /boot -maxdepth 1 -type f -name 'initramfs-*' -print -quit | grep -q .
+        grep -Eq '[[:space:]]/[[:space:]]' /etc/fstab
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Verify UEFI boot artifacts
+      ansible.builtin.shell: |
+        set -eu
+        grep -Eq '[[:space:]]/efi[[:space:]]' /etc/fstab
+        test -s /efi/EFI/Gentoo/grubx64.efi || test -s /efi/EFI/BOOT/BOOTX64.EFI
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: disk.is_uefi | bool
+
+    - name: Verify BIOS GRUB modules
+      ansible.builtin.command:
+        argv:
+          - test
+          - -d
+          - /boot/grub/i386-pc
+      changed_when: false
+      when: not disk.is_uefi | bool
+
+    - name: Final bootability summary
       ansible.builtin.debug:
         msg:
-          - "Chroot setup complete through kernel installation."
-          - "GRUB install, grub.cfg generation, services, and final install tasks are intentionally not implemented yet."
+          - "Chroot setup complete through bootloader installation."
+          - "GRUB target={{ lgi_grub_target }}"
+          - "GRUB platform={{ lgi_grub_platform }}"
+          - "dhcpcd is installed and enabled for {{ system.init_system }}."
+          - "Boot checks passed for kernel, initramfs, grub.cfg, fstab, and firmware-specific GRUB artifacts."

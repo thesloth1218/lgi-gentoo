@@ -32,4 +32,4 @@ else
     ANSIBLE_PLAYBOOK=ansible-playbook
 fi
 
-exec "$ANSIBLE_PLAYBOOK" -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml
+exec "$ANSIBLE_PLAYBOOK" -v -i ansible/inventory/chroot.ini ansible/playbooks/chroot.yml
