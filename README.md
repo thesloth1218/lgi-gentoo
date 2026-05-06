@@ -11,9 +11,9 @@ FOR using existing configs from github/etc make sure wget can fetch them ie raw.
 Feel free to make issues and Ill try to fix them but its meant to be very basic 
 
 
-TESTING/DEV:
+## TESTING/DEV:
 
-## Live CD test package
+Live CD test package
 
 Build a portable runner package:
 
@@ -35,27 +35,5 @@ cd lgi-gentoo
 python3 main.py
 ```
 
-## Git clone workflow
-
-On a live CD with `git` and network access:
-
-```sh
-git clone https://github.com/TheSloth1218/LGI-Gentoo.git
-cd LGI-Gentoo
-python3 main.py
-```
-
-## Development
-
-Generate installer outputs:
-
-```sh
-python3 main.py generate
-```
-
-Run the outside playbook:
-
-```sh
-python3 main.py install
 ```
 
