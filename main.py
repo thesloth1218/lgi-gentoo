@@ -1,3 +1,12 @@
+"""
+Kyle Rabago
+IS 2053
+LGI (Larry's Gentoo Installer)
+
+A Python TUI and Ansible-driven installer that guides users through building
+a bootable Gentoo Linux system.
+"""
+
 import argparse
 import sys
 
